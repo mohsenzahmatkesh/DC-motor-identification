@@ -1,0 +1,210 @@
+clc
+clear
+close all
+
+% === Step 1: Load the CSV Data ===
+data = readtable('velocity_feedback_comparison.csv');
+
+% Extract time, input (commanded), and output (measured)
+t = data.time_s;
+u = data.commanded_deg_s;
+y = data.feedback_deg_s;
+
+% === Step 2: Create iddata Object ===
+Ts = mean(diff(t));  % Sampling time
+sys_data = iddata(y, u, Ts);
+
+% === Step 3: Estimate Transfer Function (tfest) ===
+model_order = 2;    % number of poles
+model_zeros = 2;    % number of zeros
+
+sys_tf = tfest(sys_data, model_order, model_zeros);
+
+sys_ss = ss(sys_tf)  % Convert transfer function to state-space
+
+t_uniform = t(1):Ts:t(end);  % uniformly spaced time
+
+% Interpolate u and y to match this time base
+u_uniform = interp1(t, u, t_uniform);
+y_uniform = interp1(t, y, t_uniform);  % not required for lsim, but useful for plotting
+
+% === Step 5: Simulate Model Output Using lsim ===
+[y_sim, t_sim] = lsim(sys_ss, u_uniform, t_uniform);
+
+% === Step 6: Save Simulation Result ===
+result = table(t_uniform', u_uniform', y_uniform', y_sim, ...
+    'VariableNames', {'time_s', 'commanded_deg_s', 'measured_deg_s', 'simulated_deg_s'});
+
+writetable(result, 'sim_vs_real_velocity.csv');
+disp("✅ Simulated output saved to 'sim_vs_real_velocity.csv'");
+
+% === Step 7: Plot with Custom Styling ===
+figure('Color','w', 'Name', 'Custom Comparison Plot', ...
+       'Units', 'pixels', 'Position', [100, 100, 1200, 800]);
+
+plot(t, y, 'Color', [0.5, 0, 0.5], 'LineWidth', 2.5); hold on;  % Purple → Measured
+% plot(t_uniform, y_uniform, 'Color', [0.5, 0, 0.5], 'LineWidth', 2.5); hold on;
+
+plot(t_sim, y_sim, 'Color', [0, 0.6, 0.6], 'LineWidth', 2.5);   % Teal → Simulated
+xlabel('Time (s)', 'FontSize', 20);
+ylabel('Velocity (deg/s)', 'FontSize', 20);
+% title('BLDC motor model identification result', 'FontSize', 20);
+legend({'BLDC motor response', 'Simulated model response'}, 'FontSize', 20, 'Location', 'northeast');
+grid on;
+ax = gca;
+xlim([0 60]);
+ax.FontSize = 20;
+
+% === Step Response: Transfer Function vs State-Space ===
+figure('Color','w', 'Name', 'Step Response Comparison', ...
+       'Units', 'pixels', 'Position', [100 100 1000 500]);
+
+step(sys_tf, 3); hold on
+step(sys_ss, 3);  % Same model in SS form
+% legend('Transfer Function', 'State-Space', 'FontSize', 14, 'Location', 'southeast');
+xlabel('Time (s)', 'FontSize', 14);
+ylabel('Velocity (deg/s)', 'FontSize', 14);
+title('Step Response Comparison: TF vs SS', 'FontSize', 16);
+grid on;
+
+% clear
+%% === Manual PID Controller ===
+A = [-135.2,  -44.69;
+        32,      0];
+
+B = [1;
+     0];
+
+C = [0.8183, 0.1581];
+
+D = 1.004;
+
+sys_ss = ss(A, B, C, D);
+
+
+% Trial PID values (tune as needed)
+Kp = 5;
+Ki = 50;
+Kd = 0.0;
+C_pid_manual = pid(Kp, Ki, Kd);
+
+
+% Closed-loop system with PID
+G_cl_manual = feedback(C_pid_manual * sys_ss, 1);  % Unity feedback
+
+% % === Time and Input Signal ===
+% dt = 0.001;
+% T = 5;
+% t = 0:dt:T;
+% 
+f = 1;  % Frequency in Hz
+x2_ref = sin(2 * pi * f * t);  % Sinusoidal reference input
+% 
+% % === Simulate Response ===
+% [y_pid, t_pid] = lsim(G_cl_manual, x2_ref, t);
+
+
+
+% === Plot Results ===
+% figure('Color','w', 'Position', [100 100 1200 500]);
+% plot(t_pid, y_pid, 'b', 'LineWidth', 2); hold on
+% plot(t_pid, ref_input, 'k--', 'LineWidth', 2);
+% xlabel('Time (s)', 'FontSize', 24);
+% ylabel('Output Velocity (deg/s)', 'FontSize', 24);
+% legend('PID Output', 'Reference', 'FontSize', 24, 'Location', 'northeast');
+% title('PID Response to Sinusoidal Input', 'FontSize', 24);
+% grid on
+% ax = gca;
+% ax.FontSize = 24;
+
+A = [-135.2,  -44.69;
+        32,      0];
+
+B = [1;
+     0];
+
+C = [0.8183, 0.1581];
+
+D = 1.004;
+
+sys_ss = ss(A, B, C, D);
+
+
+% Trial PID values (tune as needed)
+Kp = 5;
+Ki = 50;
+Kd = 0.0;
+C_pid_manual = pid(Kp, Ki, Kd);
+
+dt = 0.002;
+T = 10;
+t = 0:dt:T;
+n = length(t);
+x_hist = zeros(n, 2);   % Assuming [position; velocity]
+u_hist = zeros(n, 1);
+e_hist = zeros(n, 1);   % Optional: track error like 's_hist' in SMC
+
+x = [0; 0];  % Initial 2-state system
+e_int = 0;
+
+f = 1;  % Frequency in Hz
+x2_ref = sin(2 * pi * f * t);  % Sinusoidal reference input
+x = [0; 0];  % Initial condition
+
+for k = 1:n
+    % Error and PID controller logic (assuming you have x2_ref)
+    e = x2_ref(k) - x(2);
+    e_int = e_int + e * dt;
+    if k == 1
+        de = 0;
+    else
+        de = (e - e_hist(k-1)) / dt;
+    end
+    u = Kp * e + Ki * e_int + Kd * de;
+
+
+    % Apply system dynamics (RK2 or Euler)
+    k1 = A*x + B*u;
+    k2 = A*(x + 0.5*dt*k1) + B*u;
+    x = x + dt * k2;
+
+    % Logging
+    x_hist(k,:) = x';
+    u_hist(k) = u;
+    e_hist(k) = e;  % Similar to s_hist
+end
+
+
+figure('Color','w', 'Position', [100 100 1200 800]);
+
+tiledlayout(3, 1, 'TileSpacing', 'tight', 'Padding', 'tight');  % 3 rows, 1 column
+
+% --- Top Plot: Velocity Tracking ---
+nexttile
+plot(t, x_hist(:,2), 'b', 'LineWidth', 2); hold on
+plot(t, x2_ref, 'k--', 'LineWidth', 2);
+ylabel('Velocity (x_2)', 'FontSize', 24);
+legend('Actual', 'Reference', 'FontSize', 24);
+title('SMC Velocity Tracking (Exact Dynamics)', 'FontSize', 20);
+grid on
+ax = gca;
+ax.FontSize = 24;
+
+% --- Middle Plot: Control Input ---
+nexttile
+plot(t, u_hist, 'Color', [0 0.6 0.6], 'LineWidth', 2);
+ylabel('Control Input (u)', 'FontSize', 24);
+title('Control Effort', 'FontSize', 20);
+grid on
+ax = gca;
+ax.FontSize = 24;
+
+% --- Bottom Plot: Sliding Surface ---
+nexttile
+plot(t, e_hist, 'r', 'LineWidth', 2);
+ylabel('Sliding Surface (s)', 'FontSize', 24);
+xlabel('Time (s)', 'FontSize', 24);
+title('Sliding Surface Evolution', 'FontSize', 20);
+grid on
+ax = gca;
+ax.FontSize = 24;
