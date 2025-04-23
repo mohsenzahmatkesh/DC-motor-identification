@@ -7,7 +7,7 @@ import random
 import threading
 
 # === Serial Port Configuration ===
-SERIAL_PORT = '/dev/ttyACM2'
+SERIAL_PORT = '/dev/ttyACM1'
 BAUDRATE = 115200
 TIMEOUT = 1
 MOTOR_ID = 0x01

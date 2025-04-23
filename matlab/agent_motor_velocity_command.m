@@ -2,37 +2,84 @@ clc
 clear
 
 % --- Configuration ---
-SERIAL_PORT = '/dev/ttyACM2';
+SERIAL_PORT = '/dev/ttyACM1';
 BAUDRATE = 115200;
 TIMEOUT = 1;
 MOTOR_ID = 1;
 
+last_angle_deg = [];
+last_time_s = [];
+angle_log = [];
+velocity_log = [];
+time_log = [];
+initial_angle_deg = [];  % to hold the starting absolute angle
+
+T_total = 5;        % Total run time in seconds
+interval = 0.002;    % Sample every 50ms
+
 % Open Serial Port
 ser = serialport(SERIAL_PORT, BAUDRATE, 'Timeout', TIMEOUT);
 
-%% Send a velocity command
-speed_val = 100000;  % Example: 10 deg/s
+% Send velocity command
+speed_val = 100000;
 send_velocity_command(speed_val, ser, MOTOR_ID);
 
-%% Wait for 10 seconds
-pause(10);
+% Start timing
+t0 = tic;
 
-%% Stop the motor
-send_velocity_command(0, ser, MOTOR_ID);
+while toc(t0) < T_total
+    encoder_cmd = build_command_read(hex2dec('94'), MOTOR_ID);
+    write(ser, encoder_cmd, 'uint8');
+    pause(0.002);
 
-%% Read encoder value
-encoder_cmd = build_command_read(hex2dec('94'), MOTOR_ID);
-write(ser, encoder_cmd, 'uint8');
-pause(0.05);  % Wait a bit for response
-if ser.NumBytesAvailable >= 10
-    response = read(ser, 10, 'uint8');
-    angle_bytes = response(6:9);  % MATLAB is 1-based index
-    angle_val = typecast(uint8(angle_bytes), 'uint32');
-    angle_deg = mod(double(angle_val), 36000);
-    disp(['Angle: ', num2str(angle_deg / 100), ' deg']);
-else
-    disp('No encoder response received.');
+    if ser.NumBytesAvailable >= 10
+        response = read(ser, 10, 'uint8');
+        angle_bytes = response(6:9);
+        angle_val = typecast(uint8(angle_bytes), 'uint32');
+        angle_deg_raw = double(angle_val) / 100;  % No mod → gives cumulative degree
+        if isempty(initial_angle_deg)
+            initial_angle_deg = angle_deg_raw;
+        end
+
+% Relative angle starting from zero
+        angle_deg = angle_deg_raw - initial_angle_deg;
+        current_time_s = toc(t0);
+
+        if ~isempty(last_angle_deg) && ~isempty(last_time_s)
+            dt = current_time_s - last_time_s;
+            dtheta = angle_deg - last_angle_deg;
+
+            % Handle wrap-around
+            if dtheta > 180
+                dtheta = dtheta - 360;
+            elseif dtheta < -180
+                dtheta = dtheta + 360;
+            end
+
+            velocity_deg_s = dtheta / dt;
+        else
+            velocity_deg_s = 0;
+        end
+
+        % Log data
+        angle_log(end+1) = angle_deg;
+        velocity_log(end+1) = velocity_deg_s;
+        time_log(end+1) = current_time_s;
+
+        % Update last values
+        last_angle_deg = angle_deg;
+        last_time_s = current_time_s;
+
+        fprintf('[%.3fs] angle: %.2f deg | velocity: %.2f deg/s\n', current_time_s, angle_deg, velocity_deg_s);
+    else
+        disp('No encoder response received.');
+    end
+
+    pause(interval);
 end
+
+% Stop motor
+send_velocity_command(0, ser, MOTOR_ID);
 
 %% --- Helper Functions ---
 function send_velocity_command(speed_val, ser, motor_id)
