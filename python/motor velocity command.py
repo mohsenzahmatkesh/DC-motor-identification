@@ -44,53 +44,63 @@ def read_encoder():
     return angle % 36000
 
 def read_velocity():
-    read_cmd = build_command_read(0x9C)
+    """
+    Reads motor's current speed (if supported by 0x9C command).
+    Returns velocity in deg/s (from 0.01 deg/s).
+    """
+    read_cmd = build_command_read(0x9C, [])
     ser.write(read_cmd)
-    response = ser.read(13)
+    response = ser.read(13)  # response is usually 13 bytes
     if len(response) < 13:
         return None
 
-    # Slice last 4 bytes for velocity
+    # Speed is at bytes 9 to 12 (last 4 bytes), signed int32
     speed_bytes = response[9:13]
-    speed_val = struct.unpack('<i', bytes(speed_bytes))[0]
-    return speed_val * 0.01  # Convert from 0.01 deg/s to deg/s
+    speed_val = struct.unpack('<i', speed_bytes)[0]  # signed int
+    return speed_val * 0.01  # convert from 0.01 deg/s to deg/s
 
 
 def send_velocity_command(speed_val):
+    """
+    Send velocity command using command 0xA2.
+    speed_val: signed int in 0.01 deg/s
+    """
     data_bytes = list(struct.pack('<i', int(speed_val)))
     packet = build_command(0xA2, data_bytes)
     send_command(packet)
 
+# === Velocity Test Configuration ===
+#velocity_sequence = [0, 30, 60, 90, 60, 30, 0, -30, -60, -90, -60, -30, 0]  # deg/s
 levels = [-90, -60, -30, 0, 30, 60, 90]
-n_levels = 3
+n_levels = 30                     # Number of velocity steps
 velocity_sequence = [random.choice(levels) for _ in range(n_levels)]
+hold_time = 2     # seconds at each speed
+interval = 0.002    # logging interval (50 ms)
+log = []            # [time, commanded_deg_s, angle_deg]
 
-interval = 0.002  # 2 ms sampling
-samples_per_speed = int(1 / interval)  # 1 second at each speed
-log = []  # Will store [time, commanded_deg_s, angle_deg, measured_deg_s]
+start_time = time.time()
 
 for speed_deg_s in velocity_sequence:
-    speed_val = int(speed_deg_s * 100)  # Convert to 0.01 deg/s units
+    speed_val = int(speed_deg_s * 100)  # 0.01 deg/s
+    #print(f"Sending velocity command: {speed_deg_s:.1f} deg/s")
     send_velocity_command(speed_val)
 
-    for _ in range(samples_per_speed):
-        t_now = len(log) * interval
+    hold_start = time.time()
+    while time.time() - hold_start < hold_time:
+        t_now = time.time() - start_time
         angle = read_encoder()
-        velocity = read_velocity()
-
-        if angle is not None and velocity is not None:
+        if angle is not None:
             angle_deg = angle * 0.01
-            print(f"[{t_now:.3f}s] speed={speed_deg_s}, angle={angle_deg}, feedback_vel={velocity}")
-            log.append([t_now, speed_deg_s, angle_deg, velocity])
-
+            print(f"[{t_now:.3f}s] speed={speed_deg_s}, angle={angle_deg}")
+            log.append([t_now, speed_deg_s, angle_deg])
         time.sleep(interval)
 
-# Stop the motor
+# Stop motor
 send_velocity_command(0)
 print("✅ Logging complete.")
 
-# === Convert to DataFrame and Save ===
-df = pd.DataFrame(log, columns=["time_s", "commanded_deg_s", "angle_deg", "measured_deg_s"])
+# === Convert and Save ===
+df = pd.DataFrame(log, columns=["time_s", "commanded_deg_s", "angle_deg"])
 
 # === Compute Feedback Velocity with Wraparound Correction ===
 angle_diff = df["angle_deg"].diff()
@@ -99,14 +109,16 @@ time_diff = df["time_s"].diff()
 df["feedback_deg_s"] = angle_diff / time_diff
 df["feedback_deg_s"].fillna(0, inplace=True)
 
+# === Optional Smoothing ===
+#df["feedback_deg_s_filtered"] = df["feedback_deg_s"].rolling(window=3, center=True).mean()
+
 # === Save CSV ===
 df.to_csv("velocity_feedback_comparison.csv", index=False)
 
 # === Plotting ===
 plt.figure(figsize=(10, 5))
-plt.plot(df["time_s"], df["measured_deg_s"], label="Measured Velocity (read)", linewidth=2)
-plt.plot(df["time_s"], df["feedback_deg_s"], label="Estimated Velocity (angle diff)", linewidth=2)
-plt.plot(df["time_s"], df["commanded_deg_s"], '--', label="Commanded Velocity", linewidth=2)
+plt.plot(df["time_s"], df["feedback_deg_s"], label="Feedback", linewidth=2)
+plt.plot(df["time_s"], df["commanded_deg_s"], '--', label="Commanded", linewidth=2)
 plt.xlabel("Time (s)")
 plt.ylabel("Velocity (deg/s)")
 plt.title("Motor Velocity: Commanded vs Feedback")

@@ -4,7 +4,7 @@ import struct
 import pandas as pd
 
 # Serial port and motor configuration parameters
-SERIAL_PORT = '/dev/ttyACM1'   # Modify according to your actual configuration (on Ubuntu, it might be "/dev/ttyUSB0")
+SERIAL_PORT = '/dev/ttyACM0'   # Modify according to your actual configuration (on Ubuntu, it might be "/dev/ttyUSB0")
 BAUDRATE = 115200
 TIMEOUT = 1            # Timeout in seconds
 MOTOR_ID = 0x01
