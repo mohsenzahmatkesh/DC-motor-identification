@@ -76,20 +76,22 @@ i = 0
 try:
     while i < len(df):
         angle = read_encoder()
+        t_now = time.time() - start_time
         if angle is not None:
             angle_deg = angle * 0.01
             if angle_deg_prev is not None:
-                angle_diff = (angle_deg - angle_deg_prev)/time_step
+                angle_diff = angle_deg - angle_deg_prev
                 if angle_diff > 180:
                     angle_diff -= 360
                 elif angle_diff < -180:
                     angle_diff += 360
+                velocity_fed = angle_diff / time_step
             else:
-                angle_diff = 0
+                velocity_fed = 0
         
             angle_ref = df.loc[i, 'angle']
             e_pos = angle_ref - angle_deg
-            e_vel = angle_diff
+            e_vel = -velocity_fed
             
             e_int = e_int * 0.999 + e_vel * time_step
             
@@ -97,17 +99,43 @@ try:
             
             u = -landa * e_pos - 32*0 * angle_deg - eta * sat(s / epsilon) - 1.5 * e_int;
             
-            speed_val = int(u  * 100)  # 0.01 deg/s
-            send_velocity_command(speed_val)
-            if abs(e_pos) < 0.1 and abs(e_vel) < 0.1:
-                send_velocity_command(0)
-                break
-        
+            if u>80:
+                u=80
+            elif u<-80:
+                u=-80
+            else:
+                u = u
+            
+            velocity_com = int(u  * 100)  # 0.01 deg/s
+            send_velocity_command(velocity_com)
+            log.append([t_now, velocity_fed, velocity_com*0.01])
+            
+
             angle_deg_prev = angle_deg
-            time.sleep(interval)
+            time.sleep(time_step)
             i += 1
             
-except KeyboardInterrupt():
+    log_df = pd.DataFrame(log, columns=['t_now', 'velocity_fed', 'velocity_com'])      
+    log_df.to_csv('log_with_index.txt', index=False)
+    log_df = pd.read_csv('log_with_index.txt')  # ✅ Correct
+
+
+
+    
+    plt.figure(figsize=(10, 5))
+    plt.plot(log_df["t_now"], log_df["velocity_fed"], label="Feedback", linewidth=2)
+    plt.plot(log_df["t_now"], log_df["velocity_com"], '--', label="Commanded", linewidth=2)
+    plt.xlabel("Time (s)")
+    plt.ylabel("Velocity (deg/s)")
+    plt.title("Motor Velocity: Commanded vs Feedback")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+            
+except KeyboardInterrupt:
     print("Danger!")
     send_velocity_command(0)
     time.sleep(0.1)

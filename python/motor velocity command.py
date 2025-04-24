@@ -70,11 +70,11 @@ def send_velocity_command(speed_val):
     send_command(packet)
 
 # === Velocity Test Configuration ===
-#velocity_sequence = [0, 30, 60, 90, 60, 30, 0, -30, -60, -90, -60, -30, 0]  # deg/s
-levels = [-90, -60, -30, 0, 30, 60, 90]
-n_levels = 30                     # Number of velocity steps
-velocity_sequence = [random.choice(levels) for _ in range(n_levels)]
-hold_time = 2     # seconds at each speed
+velocity_sequence = [800, 800, 800, 800, 60, 30, 0, -30, -60, -90, -60, -30, 0]  # deg/s
+# levels = [-90, -60, -30, 0, 30, 60, 90]
+# n_levels = 30                     # Number of velocity steps
+# velocity_sequence = [random.choice(levels) for _ in range(n_levels)]
+hold_time = 3     # seconds at each speed
 interval = 0.002    # logging interval (50 ms)
 log = []            # [time, commanded_deg_s, angle_deg]
 
