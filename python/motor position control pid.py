@@ -8,7 +8,7 @@ SERIAL_PORT = '/dev/ttyACM0'   # Modify according to your actual configuration (
 BAUDRATE = 115200
 TIMEOUT = 1            # Timeout in seconds
 MOTOR_ID = 0x01
-TOLERANCE = 500        # ±5° corresponds to 500 (unit: 0.01°)
+TOLERANCE = 5000       # ±5° corresponds to 500 (unit: 0.01°)
 
 # Open the serial port
 ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=TIMEOUT)
@@ -93,8 +93,8 @@ def move_motor(target_position, spin_direction, speed):
         print(f"Current angle: {current/100:.2f}°, Target angle: {target_position/100:.2f}°, Difference: {diff/100:.2f}°")
         if diff <= TOLERANCE:
             break
-        time.sleep(0.2)
-    time.sleep(0.1)
+        time.sleep(0.01)
+    time.sleep(0.01)
 
 #############################################
 # New main program: Read a new data file and control the motor
@@ -106,44 +106,97 @@ def main_new():
     Instead of reading from file, send a sequence of angles,
     collect feedback, compare and plot.
     """
-    current_position = 0  # Current motor position (0.01°)
+    current_position = 0  #
     
-    # Define target angles (in degrees)
-    angle_sequence = [0, 45, 90, 180, 270, 359, 180, 0]
-    hold_time = 0.01  # seconds to hold each position
-    speed_val = 4000  # movement speed (0.01 deg/s)
-    Kp = 10  # tuning parameter
-    min_speed = 500     # minimum speed command (in 0.01 deg/s)
-    max_speed = 8000    # maximum speed command (in 0.01 deg/s)
-    log = []  # List to store [timestamp, target_deg, feedback_deg]
-
+    # angle_sequence = [0, 45, 90, 180, 270, 35, 180, 0]
+    df = pd.read_csv("queen 1min angle.txt")
+    angle_sequence = df["angle"].tolist()
+    hold_time = 0.05  
+    # speed_val = 400  # movement speed (0.01 deg/s)
+    Kp = 5/1
+    Kd = 2/1
+    Ki = 0.5/1
+    dt = 0.1
+    e_int = 0
+    e_pos_prev = 0
+    min_speed = 0     
+    max_speed = 80000    
+    log = [] 
+    
+    i = 0
     start_time = time.time()
+    command_start_time = time.time()
 
-    for target_deg in angle_sequence:
+    # for target_deg in angle_sequence:
+    #     new_target = int(round(target_deg * 100)) % 36000
+    #     current_position = read_encoder() 
+    #     current_position %= 36000
+
+    #     diff = new_target - current_position
+    #     if diff > 18000:
+    #         diff -= 36000
+    #     elif diff < -18000:
+    #         diff += 36000
+    #     spin_direction = 0x00 if diff >= 0 else 0x01
+            
+    #     e_pos = diff
+    #     e_vel = (e_pos - e_pos_prev) / dt  
+    #     e_int += e_pos * dt
+    #     e_pos_prev = e_pos
+        
+    #     # PID controller
+    #     u = Kp * e_pos + Kd * e_vel + Ki * e_int
+    #     speed_val = int(min(max(abs(u), min_speed), max_speed))        
+
+    #     move_motor(new_target, spin_direction, speed_val)
+    #     now = time.time() - start_time
+    #     feedback = read_encoder()
+    #     error_abs = abs(target_deg - feedback * 0.01)
+    #     log.append([now, target_deg, feedback * 0.01, error_abs, speed_val])
+    #     time.sleep(dt)
+
+    while i < len(angle_sequence):
+        now = time.time() - start_time
+        target_deg = angle_sequence[i]
         new_target = int(round(target_deg * 100)) % 36000
-        current_position = read_encoder() 
+    
+        current_position = read_encoder() or 0
         current_position %= 36000
-
+    
         diff = new_target - current_position
         if diff > 18000:
             diff -= 36000
         elif diff < -18000:
             diff += 36000
         spin_direction = 0x00 if diff >= 0 else 0x01
-        # speed_val = max(min(Kp * abs(diff), max_speed), min_speed)
-
-        print(f"Moving to {target_deg:.2f}°, speed_val={speed_val}")
+    
+        e_pos = diff
+        e_vel = (e_pos - e_pos_prev) / dt
+        e_int += e_pos * dt
+        e_pos_prev = e_pos
+    
+        # PID controller
+        u = Kp * e_pos + Kd * e_vel + Ki * e_int
+        speed_val = int(min(max(abs(u), min_speed), max_speed))   
+    
         move_motor(new_target, spin_direction, speed_val)
-        now = time.time() - start_time
+    
         feedback = read_encoder()
-        log.append([now, target_deg, feedback * 0.01])
-        time.sleep(0.01)
+        if feedback is not None:
+            error_abs = abs(target_deg - feedback * 0.01)
+            log.append([now, target_deg, feedback * 0.01, error_abs, speed_val])
+    
+        # Step to next target every 0.1 seconds
+        if time.time() - command_start_time >= dt:
+            i += 1
+            command_start_time = time.time()
+
 
     print("✅ Logging complete. Saving...")
 
     # Save as CSV
-    df = pd.DataFrame(log, columns=["time_s", "commanded_deg", "feedback_deg"])
-    df.to_csv("angle_feedback_comparison.csv", index=False)
+    df = pd.DataFrame(log, columns=["time_s", "commanded_deg", "feedback_deg", "error_abs_deg", "control_command"])
+    df.to_csv("angle_feedback_comparison_pid.csv", index=False)
 
     # Plotting
     plt.figure(figsize=(10, 5))
@@ -156,7 +209,26 @@ def main_new():
     plt.grid(True)
     plt.tight_layout()
     plt.show()
-
+    
+    plt.figure(figsize=(10, 4))
+    plt.plot(df["time_s"], df["error_abs_deg"], color='red', label="Absolute Error", linewidth=2)
+    plt.xlabel("Time (s)")
+    plt.ylabel("Error (deg)")
+    plt.title("Absolute Tracking Error Over Time")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    
+    plt.figure(figsize=(10, 4))
+    plt.plot(df["time_s"], df["control_command"], color='red', label="Control command", linewidth=2)
+    plt.xlabel("Time (s)")
+    plt.ylabel("Angular rate (deg/sec)")
+    plt.title("PID Control Effort")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
 #############################################
 # Choose the main function to run based on requirements:
